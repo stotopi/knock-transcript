@@ -21,8 +21,9 @@ subprocess.check_call(
         "pip",
         "install",
         "-q",
+        "--upgrade",
         "youtube-transcript-api",
-        "yt-dlp",
+        "yt-dlp[default]",
         "google-api-python-client",
         "google-auth",
     ]
@@ -222,8 +223,11 @@ def main():
     videos = get_recent_videos()
 
     if not videos:
-        print("対象の動画が見つかりませんでした。")
-        return
+        print("[ERROR] 対象の動画が見つかりませんでした。動画情報の取得に失敗した可能性があります。")
+        raise SystemExit(1)
+
+    saved_count = 0
+    transcript_failure_count = 0
 
     for v in videos:
         vid = v["id"]
@@ -234,11 +238,18 @@ def main():
         print(f"\n--- 確認中: {v['title']} ({formatted_date}, ID: {vid}) ---")
         transcript_text = fetch_full_transcript(vid)
         if not transcript_text:
+            transcript_failure_count += 1
+            print(f"[WARN] 文字起こしを取得できなかったため保存をスキップしました: {vid}")
             continue
 
         save_or_update_drive_file(drive_service, filename, transcript_text)
+        saved_count += 1
 
-    print("\n=== 処理完了 ===")
+    if saved_count == 0:
+        print(f"[ERROR] 文字起こしを1件も保存できませんでした（取得失敗: {transcript_failure_count}件）。")
+        raise SystemExit(1)
+
+    print(f"\n=== 処理完了：{saved_count}件保存 ===")
 
 
 if __name__ == "__main__":
