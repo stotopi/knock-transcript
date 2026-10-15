@@ -1,0 +1,27 @@
+name: Auto Save YouTube Transcript
+
+on:
+  # 2時間おきに自動実行（毎時0分・偶数時間）
+  schedule:
+    - cron: '0 */2 * * *'
+  # 手動で今すぐテスト実行したい時用のボタンを有効化
+  workflow_dispatch:
+
+jobs:
+  save-transcript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run transcript saver script
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python save_youtube_transcript_to_drive.py
