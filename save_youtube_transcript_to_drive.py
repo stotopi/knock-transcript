@@ -1,61 +1,26 @@
-#!/usr/bin/env python3
-"""
-【Google Colab ワンクリック実行対応版】
-このファイルの中身（コード全体）をコピーして、Google Colabの1つのセルに貼り付けて実行してください。
-（パッケージのインストールも自動で実行されるため、事前の !pip install セルも不要です）
-"""
-
 import io
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime
 from typing import Optional, List, Dict
 
-# 必要なライブラリを自動インストール（Google Colab等で1セルだけで動くように対応）
-subprocess.check_call(
-    [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "-q",
-        "--upgrade",
-        "youtube-transcript-api",
-        "yt-dlp[default]",
-        "google-api-python-client",
-        "google-auth",
-    ]
-)
-
-import yt_dlp
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ==========================================
 # 設定項目
 # ==========================================
-CHANNEL_STREAMS_URL = "https://www.youtube.com/@knock2525/streams"
+CHANNEL_ID = "UCOyqJqA00RMBp04E3fGkKwg" # ノックチャンネルのチャンネルID（要確認・修正）
 DRIVE_FOLDER_ID = "1v0p6mO7kROq_zGAI-wArsiTBNpbvr12v"
+TARGET_VIDEO_URLS = ["https://www.youtube.com/live/7mrFHdSr0O8"]
 
-# 優先取得する動画URL（2026/10/14配信分をデフォルト設定済み）
-TARGET_VIDEO_URLS = [
-    "https://www.youtube.com/live/7mrFHdSr0O8",
-]
-MAX_RECENT_VIDEOS_TO_CHECK = 3
-
+# 実行状態の集計用
+stats = {"success": 0, "already_exists": 0, "error": 0}
 
 def get_drive_service():
     """Google Colab認証 または サービスアカウント認証でDrive APIクライアントを取得"""
-    try:
-        from google.colab import auth  # type: ignore
-        auth.authenticate_user()
-        return build("drive", "v3")
-    except ImportError:
-        pass
-
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if sa_json:
         from google.oauth2 import service_account
@@ -69,9 +34,8 @@ def get_drive_service():
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
     return build("drive", "v3", credentials=creds)
 
-
 def format_timestamp(seconds: float) -> str:
-    """秒数を既存ファイルと同じタイムスタンプ形式（例: 1:361 分 36 秒）に整形"""
+    """秒数を既存ファイルと同じタイムスタンプ形式に整形"""
     total_sec = int(seconds)
     hours = total_sec // 3600
     minutes = (total_sec % 3600) // 60
@@ -86,93 +50,69 @@ def format_timestamp(seconds: float) -> str:
 
     return f"{short_ts}{jp_ts}"
 
-
-def get_recent_videos() -> List[Dict[str, str]]:
-    """対象動画リスト、およびノックチャンネルの直近の配信メタデータを取得"""
-    ydl_opts = {
-        "quiet": True,
-        "extract_flat": False,
-        "skip_download": True,
-        "playlistend": MAX_RECENT_VIDEOS_TO_CHECK,
-    }
-    videos: List[Dict[str, str]] = []
+def get_recent_videos(api_key: str, channel_id: str, max_results: int = 3) -> List[Dict[str, str]]:
+    """YouTube Data API v3を使用して最新の配信情報を取得"""
+    videos = []
     seen_ids = set()
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    try:
+        youtube = build('youtube', 'v3', developerKey=api_key)
+        
+        # 指定URLの取得
         for url in TARGET_VIDEO_URLS:
-            try:
-                info = ydl.extract_info(url, download=False)
-                vid = info.get("id")
-                if vid and vid not in seen_ids:
-                    seen_ids.add(vid)
+            video_id = url.split('/')[-1]
+            if video_id not in seen_ids:
+                request = youtube.videos().list(part="snippet", id=video_id)
+                response = request.execute()
+                for item in response.get('items', []):
+                    seen_ids.add(item['id'])
                     videos.append({
-                        "id": vid,
-                        "title": info.get("title", ""),
-                        "upload_date": info.get("upload_date") or datetime.now().strftime("%Y%m%d"),
+                        "id": item['id'],
+                        "title": item['snippet']['title'],
+                        "upload_date": item['snippet']['publishedAt'][:10].replace('-', '')
                     })
-            except Exception as e:
-                print(f"[WARN] 個別動画情報の取得スキップ ({url}): {e}")
 
-        try:
-            playlist_info = ydl.extract_info(CHANNEL_STREAMS_URL, download=False)
-            entries = playlist_info.get("entries", []) if playlist_info else []
-            for entry in entries:
-                if not entry:
-                    continue
-                vid = entry.get("id")
-                if vid and vid not in seen_ids:
-                    seen_ids.add(vid)
-                    videos.append({
-                        "id": vid,
-                        "title": entry.get("title", ""),
-                        "upload_date": entry.get("upload_date") or datetime.now().strftime("%Y%m%d"),
-                    })
-        except Exception as e:
-            print(f"[WARN] チャンネル一覧の取得スキップ: {e}")
+        # チャンネルの最新動画取得
+        request = youtube.search().list(
+            part="id,snippet",
+            channelId=channel_id,
+            maxResults=max_results,
+            order="date",
+            type="video"
+        )
+        response = request.execute()
+        for item in response.get('items', []):
+            vid = item['id'].get('videoId')
+            if vid and vid not in seen_ids:
+                seen_ids.add(vid)
+                videos.append({
+                    "id": vid,
+                    "title": item['snippet']['title'],
+                    "upload_date": item['snippet']['publishedAt'][:10].replace('-', '')
+                })
+    except Exception as e:
+        print(f"[ERROR] 動画一覧の取得に失敗しました: {e}")
+        stats["error"] += 1
 
     return videos
 
-
 def fetch_full_transcript(video_id: str) -> Optional[str]:
-    """YouTube動画の日本語文字起こし全文を取得（v0.6系・v1.0系両対応、3時間超でも省略なし）"""
+    """YouTube動画の日本語文字起こし全文を取得"""
     try:
-        entries = None
-        # youtube-transcript-api v1.0以降の新APIに対応
-        if hasattr(YouTubeTranscriptApi, "fetch"):
-            try:
-                ytt_api = YouTubeTranscriptApi()
-                entries = ytt_api.fetch(video_id, languages=["ja"])
-            except TypeError:
-                pass
-
-        # v0.6系の従来APIへのフォールバック
-        if entries is None and hasattr(YouTubeTranscriptApi, "list_transcripts"):
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            try:
-                transcript = transcript_list.find_transcript(["ja"])
-            except Exception:
-                transcript = transcript_list.find_generated_transcript(["ja"])
-            entries = transcript.fetch()
-        elif entries is None and hasattr(YouTubeTranscriptApi, "get_transcript"):
-            entries = YouTubeTranscriptApi.get_transcript(video_id, languages=["ja"])
-
-        if not entries:
-            return None
-
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ja'])
         lines = []
-        for item in entries:
-            start = item["start"] if isinstance(item, dict) else getattr(item, "start", 0.0)
-            raw_text = item["text"] if isinstance(item, dict) else getattr(item, "text", "")
-            text = raw_text.replace("\n", " ").strip()
+        for item in transcript_list:
+            start = item["start"]
+            text = item["text"].replace("\n", " ").strip()
             ts_label = format_timestamp(start)
             lines.append(f"{ts_label}{text}  ")
-
-        full_text = "\n".join(lines)
-        return full_text if len(full_text) > 100 else None
+        return "\n".join(lines)
+    except (TranscriptsDisabled, NoTranscriptFound):
+        print(f"[WARN] 動画 {video_id} は字幕が無効、または日本語字幕がありません。")
     except Exception as e:
-        print(f"[INFO] 動画 {video_id} の文字起こしはまだ取得できません: {e}")
-        return None
-
+        print(f"[ERROR] 動画 {video_id} の字幕取得中にエラー: {e}")
+        stats["error"] += 1
+    return None
 
 def save_or_update_drive_file(drive_service, filename: str, content: str) -> str:
     """指定フォルダ内の同名ファイルをチェックし、重複を作らずに全文.txtを保存"""
@@ -191,10 +131,11 @@ def save_or_update_drive_file(drive_service, filename: str, content: str) -> str
         file_size = int(f.get("size", 0))
         mime_type = f.get("mimeType", "")
         if mime_type == "text/plain" and file_size >= 30000:
-            print(f"[SKIP] {filename} はすでに全文保存済みです (サイズ: {file_size:,} bytes, ID: {f['id']})")
+            print(f"[SKIP] {filename} はすでに全文保存済みです")
+            stats["already_exists"] += 1
             return f["id"]
         else:
-            print(f"[CLEANUP] 省略版の既存ファイル ({f['name']}, ID: {f['id']}) を削除して全文版に更新します...")
+            print(f"[CLEANUP] 省略版の既存ファイルを削除して更新します...")
             try:
                 drive_service.files().delete(fileId=f["id"]).execute()
             except Exception as e:
@@ -212,45 +153,47 @@ def save_or_update_drive_file(drive_service, filename: str, content: str) -> str
         fields="id, name, webViewLink",
     ).execute()
 
-    print(f"[SUCCESS] {filename} を全文保存しました！ ({len(content_bytes):,} bytes)")
-    print(f"          リンク: {created.get('webViewLink')}")
+    print(f"[SUCCESS] {filename} を全文保存しました！")
+    stats["success"] += 1
     return created["id"]
 
-
 def main():
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        print("[ERROR] YOUTUBE_API_KEY が設定されていません。")
+        sys.exit(1)
+
     print("=== ノックチャンネル 文字起こし全文 自動保存スクリプト開始 ===")
     drive_service = get_drive_service()
-    videos = get_recent_videos()
+    videos = get_recent_videos(api_key, CHANNEL_ID)
 
-    if not videos:
-        print("[ERROR] 対象の動画が見つかりませんでした。動画情報の取得に失敗した可能性があります。")
-        raise SystemExit(1)
-
-    saved_count = 0
-    transcript_failure_count = 0
-
+    if not videos and stats["error"] == 0:
+        print("[WARN] 対象の動画が見つかりませんでした。")
+        
     for v in videos:
         vid = v["id"]
-        raw_date = v["upload_date"]
-        formatted_date = f"{raw_date[:4]}_{raw_date[4:6]}_{raw_date[6:8]}"
-        filename = f"{formatted_date}_文字起こし.txt"
+        filename = f"{v['upload_date'][:4]}_{v['upload_date'][4:6]}_{v['upload_date'][6:8]}_文字起こし.txt"
 
-        print(f"\n--- 確認中: {v['title']} ({formatted_date}, ID: {vid}) ---")
+        print(f"\n--- 確認中: {v['title']} (ID: {vid}) ---")
         transcript_text = fetch_full_transcript(vid)
         if not transcript_text:
-            transcript_failure_count += 1
-            print(f"[WARN] 文字起こしを取得できなかったため保存をスキップしました: {vid}")
             continue
 
         save_or_update_drive_file(drive_service, filename, transcript_text)
-        saved_count += 1
 
-    if saved_count == 0:
-        print(f"[ERROR] 文字起こしを1件も保存できませんでした（取得失敗: {transcript_failure_count}件）。")
-        raise SystemExit(1)
+    print("\n[INFO] --- 実行結果 ---")
+    print(f"成功: {stats['success']}件, 重複スキップ: {stats['already_exists']}件, エラー: {stats['error']}件")
 
-    print(f"\n=== 処理完了：{saved_count}件保存 ===")
-
+    if stats["success"] == 0 and stats["already_exists"] == 0:
+        if stats["error"] > 0 or not videos:
+            print("[ERROR] 有効な文字起こしを1件も処理できませんでした。ジョブを失敗扱いにします。")
+            sys.exit(1)
+        
+    if stats["error"] > 0:
+        print("[ERROR] 一部の処理でエラーが発生したため、ジョブを失敗扱いにします。")
+        sys.exit(1)
+        
+    print("[INFO] 正常終了しました。")
 
 if __name__ == "__main__":
     main()
