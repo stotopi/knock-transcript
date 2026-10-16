@@ -12,7 +12,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 # 設定項目
 # ==========================================
-CHANNEL_ID = "UCOyqJqA00RMBp04E3fGkKwg" # ノックチャンネルのチャンネルID（要確認・修正）
+CHANNEL_ID = "UCTGk0UuXAgJczNXDJb3EVaQ" # ノックチャンネルの実際のチャンネルID
 DRIVE_FOLDER_ID = "1v0p6mO7kROq_zGAI-wArsiTBNpbvr12v"
 TARGET_VIDEO_URLS = ["https://www.youtube.com/live/7mrFHdSr0O8"]
 
@@ -97,23 +97,48 @@ def get_recent_videos(api_key: str, channel_id: str, max_results: int = 3) -> Li
     return videos
 
 def fetch_full_transcript(video_id: str) -> Optional[str]:
-    """YouTube動画の日本語文字起こし全文を取得"""
+    """YouTube動画の日本語文字起こし全文を取得（互換性対応版）"""
     try:
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ja'])
+        entries = None
+        # youtube-transcript-api v1.0以降の新APIへの対応
+        if hasattr(YouTubeTranscriptApi, "fetch"):
+            try:
+                ytt_api = YouTubeTranscriptApi()
+                entries = ytt_api.fetch(video_id, languages=["ja"])
+            except TypeError:
+                pass
+
+        # v0.6系の従来APIへのフォールバック
+        if entries is None and hasattr(YouTubeTranscriptApi, "list_transcripts"):
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            try:
+                transcript = transcript_list.find_transcript(["ja"])
+            except Exception:
+                # 手動字幕がない場合は自動生成字幕を探す
+                transcript = transcript_list.find_generated_transcript(["ja"])
+            entries = transcript.fetch()
+        elif entries is None and hasattr(YouTubeTranscriptApi, "get_transcript"):
+            entries = YouTubeTranscriptApi.get_transcript(video_id, languages=["ja"])
+
+        if not entries:
+            print(f"[WARN] 動画 {video_id} の字幕データが取得できませんでした。")
+            return None
+
         lines = []
-        for item in transcript_list:
-            start = item["start"]
-            text = item["text"].replace("\n", " ").strip()
+        for item in entries:
+            # 辞書型・オブジェクト型の両方に対応
+            start = item["start"] if isinstance(item, dict) else getattr(item, "start", 0.0)
+            raw_text = item["text"] if isinstance(item, dict) else getattr(item, "text", "")
+            text = raw_text.replace("\n", " ").strip()
             ts_label = format_timestamp(start)
             lines.append(f"{ts_label}{text}  ")
+            
         return "\n".join(lines)
-    except (TranscriptsDisabled, NoTranscriptFound):
-        print(f"[WARN] 動画 {video_id} は字幕が無効、または日本語字幕がありません。")
     except Exception as e:
         print(f"[ERROR] 動画 {video_id} の字幕取得中にエラー: {e}")
         stats["error"] += 1
-    return None
-
+        return None
+        
 def save_or_update_drive_file(drive_service, filename: str, content: str) -> str:
     """指定フォルダ内の同名ファイルをチェックし、重複を作らずに全文.txtを保存"""
     v3_query = f"'{DRIVE_FOLDER_ID}' in parents and name contains '{filename.replace('.txt', '')}' and trashed = false"
