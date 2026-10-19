@@ -161,4 +161,4 @@ def transcribe_audio(audio_path: str) -> str:
     return full_text if len(full_text) > 100 else ""
 
 
-def save_or_update_drive_file(drive_service, filename: str, content: str)
+def save_or_update_drive_file(drive_service, filename: str, content: str) -> str:
