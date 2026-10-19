@@ -17,11 +17,10 @@ from googleapiclient.http import MediaIoBaseUpload
 CHANNEL_STREAMS_URL = "https://www.youtube.com/@knock2525/streams"
 DRIVE_FOLDER_ID = "1v0p6mO7kROq_zGAI-wArsiTBNpbvr12v"
 
-# 優先取得する動画URL（必要に応じて追加可能）
-TARGET_VIDEO_URLS = [
-    "https://www.youtube.com/live/7mrFHdSr0O8",
-]
-MAX_RECENT_VIDEOS_TO_CHECK = 3
+# 優先取得する動画URL（個別指定がない場合は空でOK）
+TARGET_VIDEO_URLS = []
+# チェックする最新配信の件数（無料枠節約のため最新1件に設定）
+MAX_RECENT_VIDEOS_TO_CHECK = 1
 
 
 def get_drive_service():
@@ -162,3 +161,100 @@ def transcribe_audio(audio_path: str) -> str:
 
 
 def save_or_update_drive_file(drive_service, filename: str, content: str) -> str:
+    """Googleドライブへ文字起こしテキストをアップロード保存"""
+    v3_query = f"'{DRIVE_FOLDER_ID}' in parents and name contains '{filename.replace('.txt', '')}' and trashed = false"
+
+    res = drive_service.files().list(
+        q=v3_query,
+        fields="files(id, name, mimeType, size)",
+        pageSize=10,
+    ).execute()
+    existing_files = res.get("files", [])
+
+    content_bytes = content.encode("utf-8")
+
+    # 古いファイルや省略版が存在する場合は上書きのために一度クリーンアップ
+    for f in existing_files:
+        try:
+            drive_service.files().delete(fileId=f["id"]).execute()
+            print(f"[CLEANUP] 既存のファイル ({f['name']}) を整理しました。")
+        except Exception as e:
+            print(f"[WARN] 既存ファイル削除エラー: {e}")
+
+    media = MediaIoBaseUpload(io.BytesIO(content_bytes), mimetype="text/plain", resumable=True)
+    file_metadata = {
+        "name": filename,
+        "parents": [DRIVE_FOLDER_ID],
+        "mimeType": "text/plain",
+    }
+    created = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id, name, webViewLink",
+    ).execute()
+
+    print(f"[SUCCESS] {filename} をドライブに保存しました！ ({len(content_bytes):,} bytes)")
+    print(f"          ファイルリンク: {created.get('webViewLink')}")
+    return created["id"]
+
+
+def main():
+    print("=== ノックチャンネル 文字起こし全文 自動保存スクリプト開始 ===")
+    drive_service = get_drive_service()
+    videos = get_recent_videos()
+
+    if not videos:
+        print("対象の動画が見つかりませんでした。")
+        return
+
+    success_count = 0
+    error_count = 0
+
+    for v in videos:
+        vid = v["id"]
+        raw_date = v["upload_date"]
+        formatted_date = f"{raw_date[:4]}_{raw_date[4:6]}_{raw_date[6:8]}"
+        filename = f"{formatted_date}_文字起こし.txt"
+
+        print(f"\n--- 確認中: {v['title']} ({formatted_date}, ID: {vid}) ---")
+
+        # 1. 既に保存済みなら重い処理（ダウンロード・AI認識）をスキップ
+        if is_already_saved(drive_service, filename):
+            success_count += 1
+            continue
+
+        audio_file = None
+        try:
+            # 2. 音声のみ抽出ダウンロード
+            audio_file = download_audio(vid)
+
+            # 3. faster-whisperで文字起こし
+            transcript_text = transcribe_audio(audio_file)
+            if not transcript_text:
+                print(f"[WARN] 有効な文字起こしテキストが生成されませんでした。")
+                error_count += 1
+                continue
+
+            # 4. Googleドライブへ保存
+            save_or_update_drive_file(drive_service, filename, transcript_text)
+            success_count += 1
+
+        except Exception as e:
+            print(f"[ERROR] 動画 {vid} の処理中にエラーが発生しました: {e}")
+            error_count += 1
+
+        finally:
+            # 5. 一時保存した音声ファイルを削除して容量を解放
+            if audio_file and os.path.exists(audio_file):
+                os.remove(audio_file)
+                print(f"[INFO] 一時音声ファイル ({audio_file}) を削除しました。")
+
+    print("\n[INFO] --- 実行結果 ---")
+    print(f"成功/スキップ: {success_count}件, エラー: {error_count}件")
+
+    if success_count == 0 and error_count > 0:
+        exit(1)
+
+
+if __name__ == "__main__":
+    main()
