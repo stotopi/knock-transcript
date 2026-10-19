@@ -76,10 +76,9 @@ def get_recent_videos() -> List[Dict[str, str]]:
     """対象動画および直近の配信メタデータを取得"""
     ydl_opts = {
         "quiet": True,
-        "extract_flat": False,
+        "extract_flat": False, # 詳細なメタデータ（live_status等）を取得するため False のまま
         "skip_download": True,
-        "playlistend": MAX_RECENT_VIDEOS_TO_CHECK,
-        # ▼ ここを追加（モバイルクライアントとして通信しボット判定を回避）
+        "playlistend": MAX_RECENT_VIDEOS_TO_CHECK, # 先ほど 3 に変更した箇所
         "extractor_args": {
             "youtube": {
                 "player_client": ["android", "ios"]
@@ -90,6 +89,7 @@ def get_recent_videos() -> List[Dict[str, str]]:
     seen_ids = set()
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        # (TARGET_VIDEO_URLSの処理はそのまま)
         for url in TARGET_VIDEO_URLS:
             try:
                 info = ydl.extract_info(url, download=False)
@@ -104,12 +104,21 @@ def get_recent_videos() -> List[Dict[str, str]]:
             except Exception as e:
                 print(f"[WARN] 個別動画情報の取得スキップ ({url}): {e}")
 
+        # チャンネル一覧からの取得処理
         try:
             playlist_info = ydl.extract_info(CHANNEL_STREAMS_URL, download=False)
             entries = playlist_info.get("entries", []) if playlist_info else []
             for entry in entries:
                 if not entry:
                     continue
+                
+                # ▼ ここを追加: 待機枠や配信中の動画を除外する ▼
+                live_status = entry.get("live_status")
+                if live_status in ["is_live", "is_upcoming"]:
+                    print(f"[SKIP] 配信中または待機枠のためスキップします: {entry.get('title')}")
+                    continue
+                # ▲ ここまで ▲
+
                 vid = entry.get("id")
                 if vid and vid not in seen_ids:
                     seen_ids.add(vid)
@@ -122,7 +131,6 @@ def get_recent_videos() -> List[Dict[str, str]]:
             print(f"[WARN] チャンネル一覧の取得スキップ: {e}")
 
     return videos
-
 
 def download_audio(video_id: str, output_dir: str = "./audio_temp") -> str:
     """yt-dlpを使って動画から音声(MP3)のみを抽出ダウンロード"""
