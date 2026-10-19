@@ -1,9 +1,9 @@
 name: YouTube Transcript to Drive
 
 on:
-  workflow_dispatch: # 手動実行用
-  # schedule:
-  #   - cron: '0 15 * * *' # 定期実行が必要な場合は設定
+  workflow_dispatch: # 手動実行用ボタン（残しておくといつでも手動で動かせます）
+  schedule:
+    - cron: '0 18 * * *' # 日本時間 毎日AM 3:00 に自動実行
 
 jobs:
   transcribe_and_save:
