@@ -79,6 +79,12 @@ def get_recent_videos() -> List[Dict[str, str]]:
         "extract_flat": False,
         "skip_download": True,
         "playlistend": MAX_RECENT_VIDEOS_TO_CHECK,
+        # ▼ ここを追加（モバイルクライアントとして通信しボット判定を回避）
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios"]
+            }
+        },
     }
     videos: List[Dict[str, str]] = []
     seen_ids = set()
@@ -119,15 +125,17 @@ def get_recent_videos() -> List[Dict[str, str]]:
 
 
 def download_audio(video_id: str, output_dir: str = "./audio_temp") -> str:
-    """yt-dlpを使って動画から音声(MP3)のみを抽出ダウンロード"""
-    os.makedirs(output_dir, exist_ok=True)
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-    out_path = os.path.join(output_dir, f"{video_id}.mp3")
-
+    # ...
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
         'quiet': False,
+        # ▼ ここを追加
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        },
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
