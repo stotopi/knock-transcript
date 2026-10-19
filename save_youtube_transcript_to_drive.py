@@ -125,12 +125,15 @@ def get_recent_videos() -> List[Dict[str, str]]:
 
 
 def download_audio(video_id: str, output_dir: str = "./audio_temp") -> str:
-    # ...
+    """yt-dlpを使って動画から音声(MP3)のみを抽出ダウンロード"""
+    os.makedirs(output_dir, exist_ok=True)
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    out_path = os.path.join(output_dir, f"{video_id}.mp3")
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
         'quiet': False,
-        # ▼ ここを追加
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios']
@@ -148,7 +151,6 @@ def download_audio(video_id: str, output_dir: str = "./audio_temp") -> str:
         ydl.download([video_url])
 
     return out_path
-
 
 def transcribe_audio(audio_path: str) -> str:
     """faster-whisperを使用してローカルCPU環境で高速文字起こしを実行"""
