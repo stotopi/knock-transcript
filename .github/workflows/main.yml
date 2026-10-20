@@ -36,3 +36,8 @@ jobs:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: python save_youtube_transcript_to_drive.py
+
+      - name: Install Python dependencies
+        run: |
+          pip install yt-dlp faster-whisper yt-dlp-youtube-oauth2
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
