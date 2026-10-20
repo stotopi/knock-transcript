@@ -3,16 +3,14 @@ import io
 import json
 import os
 import re
-import tempfile
 import urllib.request
 from datetime import datetime
 from typing import List, Dict
 
-import yt_dlp
-from faster_whisper import WhisperModel
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
 # 設定項目
@@ -48,38 +46,42 @@ def is_already_saved(drive_service, filename: str) -> bool:
     v3_query = f"'{DRIVE_FOLDER_ID}' in parents and name contains '{filename.replace('.txt', '')}' and trashed = false"
     res = drive_service.files().list(q=v3_query, fields="files(id, name, mimeType, size)", pageSize=5).execute()
     for f in res.get("files", []):
-        if f.get("mimeType", "") == "text/plain" and int(f.get("size", 0)) >= 30000:
+        if f.get("mimeType", "") == "text/plain" and int(f.get("size", 0)) >= 10000:
             print(f"[SKIP] {filename} はすでに保存済みです (サイズ: {f.get('size')} bytes)")
             return True
     return False
 
-def setup_cookie_file():
-    cookie_data = os.environ.get("YOUTUBE_COOKIES")
-    if not cookie_data or not cookie_data.strip():
-        print("[WARN] YOUTUBE_COOKIES が設定されていません。ボット検知される可能性があります。")
-        return None
-    fd, path = tempfile.mkstemp(suffix=".txt", text=True)
-    with os.fdopen(fd, 'w') as f:
-        f.write(cookie_data)
-    return path
+def get_video_metadata(video_id: str) -> Dict[str, str]:
+    """タイトルと配信日を軽量に取得"""
+    title = f"YouTube_{video_id}"
+    upload_date = datetime.now().strftime("%Y%m%d")
+    
+    # タイトル取得 (oEmbed API: 制限なし・認証不要)
+    try:
+        oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            title = data.get("title", title)
+    except Exception:
+        pass
 
-def get_recent_videos(cookie_file: str) -> List[Dict[str, str]]:
+    # 配信日取得 (動画ページのmetaタグから抽出)
+    try:
+        watch_url = f"https://www.youtube.com/watch?v={video_id}"
+        req = urllib.request.Request(watch_url, headers={"User-Agent": "Mozilla/5.0"})
+        html = urllib.request.urlopen(req).read().decode("utf-8")
+        match = re.search(r'"datePublished":"(\d{4})-(\d{2})-(\d{2})"', html)
+        if match:
+            upload_date = f"{match.group(1)}{match.group(2)}{match.group(3)}"
+    except Exception:
+        pass
+
+    return {"id": video_id, "title": title, "upload_date": upload_date}
+
+def get_recent_videos() -> List[Dict[str, str]]:
+    """チャンネルページから直近の動画IDを抽出"""
     videos: List[Dict[str, str]] = []
-    seen_ids = set()
-    
-    ydl_opts_single = {
-        "quiet": True, 
-        "skip_download": True,
-        "username": "oauth2",
-        "password": ""
-    }
-    
-    # Cookieがある場合は通常クライアント、ない場合はモバイル偽装を使用
-    if cookie_file:
-        ydl_opts_single["cookiefile"] = cookie_file
-    else:
-        ydl_opts_single["extractor_args"] = {"youtube": {"player_client": ["android", "ios"]}}
-
     try:
         req = urllib.request.Request(
             CHANNEL_STREAMS_URL,
@@ -92,59 +94,29 @@ def get_recent_videos(cookie_file: str) -> List[Dict[str, str]]:
             if vid not in found_vids:
                 found_vids.append(vid)
 
-        valid_count = 0
-        with yt_dlp.YoutubeDL(ydl_opts_single) as ydl:
-            for vid in found_vids[:15]:
-                if valid_count >= MAX_RECENT_VIDEOS_TO_CHECK: break
-                if vid in seen_ids: continue
-                try:
-                    info = ydl.extract_info(vid, download=False)
-                    if info.get("live_status") in ["is_live", "is_upcoming"]:
-                        print(f"[SKIP] 配信中または待機枠のためスキップ: {info.get('title')}")
-                        continue
-                    seen_ids.add(vid)
-                    videos.append({
-                        "id": vid, "title": info.get("title", ""),
-                        "upload_date": info.get("upload_date") or datetime.now().strftime("%Y%m%d")
-                    })
-                    valid_count += 1
-                except Exception as e:
-                    print(f"[WARN] 動画詳細取得スキップ ({vid}): {e}")
+        print(f"[INFO] チャンネルから {len(found_vids)} 件の動画IDを検出")
+        for vid in found_vids[:MAX_RECENT_VIDEOS_TO_CHECK]:
+            meta = get_video_metadata(vid)
+            videos.append(meta)
     except Exception as e:
-        print(f"[ERROR] HTML取得失敗: {e}")
+        print(f"[ERROR] チャンネル一覧の取得失敗: {e}")
 
     return videos
 
-def download_audio(video_id: str, cookie_file: str, output_dir: str = "./audio_temp") -> str:
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, f"{video_id}.mp3")
-    
-    ydl_opts = {
-        'format': 'bestaudio/best', 
-        'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
-        'quiet': False,
-        'username': "oauth2",
-        'password': "",
-        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
-    }
-    
-    if cookie_file:
-        ydl_opts["cookiefile"] = cookie_file
-    else:
-        ydl_opts["extractor_args"] = {'youtube': {'player_client': ['android', 'ios']}}
-
-    print(f"[INFO] 音声ダウンロード中... ({video_id})")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-    return out_path
-
-def transcribe_audio(audio_path: str) -> str:
-    print(f"[INFO] AI文字起こし開始...")
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, info = model.transcribe(audio_path, beam_size=5, language="ja")
-    lines = [f"{format_timestamp(s.start)}{s.text.replace(chr(10), ' ').strip()}  " for s in segments]
-    full_text = "\n".join(lines)
-    return full_text if len(full_text) > 100 else ""
+def fetch_transcript(video_id: str) -> str:
+    """公式自動字幕を取得して整形"""
+    print(f"[INFO] 字幕データを取得中... ({video_id})")
+    try:
+        # 日本語字幕（自動生成含む）を優先取得
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ja'])
+        lines = [
+            f"{format_timestamp(item['start'])}{item['text'].replace(chr(10), ' ').strip()}  "
+            for item in transcript_list
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[WARN] 字幕が取得できませんでした (配信直後/待機枠/字幕無効): {e}")
+        return ""
 
 def save_or_update_drive_file(drive_service, filename: str, content: str) -> str:
     v3_query = f"'{DRIVE_FOLDER_ID}' in parents and name contains '{filename.replace('.txt', '')}' and trashed = false"
@@ -161,47 +133,37 @@ def save_or_update_drive_file(drive_service, filename: str, content: str) -> str
     return created["id"]
 
 def main():
-    print("=== 自動保存スクリプト開始 ===")
-    cookie_file = setup_cookie_file()
+    print("=== YouTube公式字幕 自動保存スクリプト開始 ===")
     drive_service = get_drive_service()
-    videos = get_recent_videos(cookie_file)
-    
+    videos = get_recent_videos()
+
     if not videos:
         print("対象動画なし。")
-        if cookie_file and os.path.exists(cookie_file): os.remove(cookie_file)
         return
-        
+
     success_count, error_count = 0, 0
     for v in videos:
         vid, raw_date = v["id"], v["upload_date"]
         filename = f"{raw_date[:4]}_{raw_date[4:6]}_{raw_date[6:8]}_文字起こし.txt"
-        print(f"\n--- 確認中: {v['title']} ---")
-        
+        print(f"\n--- 確認中: {v['title']} ({vid}) ---")
+
         if is_already_saved(drive_service, filename):
             success_count += 1
             continue
-            
-        audio_file = None
+
+        text = fetch_transcript(vid)
+        if not text:
+            print(f"[SKIP] 字幕データが存在しないため処理をスキップします。")
+            continue
+
         try:
-            audio_file = download_audio(vid, cookie_file)
-            text = transcribe_audio(audio_file)
-            if not text:
-                error_count += 1
-                continue
             save_or_update_drive_file(drive_service, filename, text)
             success_count += 1
         except Exception as e:
-            print(f"[ERROR] {vid}: {e}")
+            print(f"[ERROR] Drive保存失敗 ({vid}): {e}")
             error_count += 1
-        finally:
-            if audio_file and os.path.exists(audio_file): os.remove(audio_file)
-            
-    print(f"\n[INFO] 成功/スキップ: {success_count}, エラー: {error_count}")
-    
-    if cookie_file and os.path.exists(cookie_file):
-        os.remove(cookie_file)
-        
-    if success_count == 0 and error_count > 0: exit(1)
+
+    print(f"\n[INFO] 処理完了 - 成功/スキップ: {success_count}, エラー: {error_count}")
 
 if __name__ == "__main__":
     main()
