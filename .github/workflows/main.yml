@@ -32,6 +32,7 @@ jobs:
 
       - name: Run script
         env:
-          # 既存のGoogle Drive認証用シークレットなどはそのまま流用
+          # Google Drive認証とYouTube Cookieのシークレットを読み込む
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: python save_youtube_transcript_to_drive.py
