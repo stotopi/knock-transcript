@@ -55,7 +55,7 @@ def is_already_saved(drive_service, filename: str) -> bool:
 
 def setup_cookie_file():
     cookie_data = os.environ.get("YOUTUBE_COOKIES")
-    if not cookie_data:
+    if not cookie_data or not cookie_data.strip():
         print("[WARN] YOUTUBE_COOKIES が設定されていません。ボット検知される可能性があります。")
         return None
     fd, path = tempfile.mkstemp(suffix=".txt", text=True)
@@ -66,12 +66,15 @@ def setup_cookie_file():
 def get_recent_videos(cookie_file: str) -> List[Dict[str, str]]:
     videos: List[Dict[str, str]] = []
     seen_ids = set()
+    
     ydl_opts_single = {
-        "quiet": True, "skip_download": True,
-        "extractor_args": {"youtube": {"player_client": ["android", "ios"]}}
+        "quiet": True, "skip_download": True
     }
+    # Cookieがある場合は通常クライアント、ない場合はモバイル偽装を使用
     if cookie_file:
         ydl_opts_single["cookiefile"] = cookie_file
+    else:
+        ydl_opts_single["extractor_args"] = {"youtube": {"player_client": ["android", "ios"]}}
 
     try:
         req = urllib.request.Request(
@@ -111,13 +114,17 @@ def get_recent_videos(cookie_file: str) -> List[Dict[str, str]]:
 def download_audio(video_id: str, cookie_file: str, output_dir: str = "./audio_temp") -> str:
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"{video_id}.mp3")
+    
     ydl_opts = {
         'format': 'bestaudio/best', 'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
-        'quiet': False, 'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
+        'quiet': False,
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
     }
+    
     if cookie_file:
         ydl_opts["cookiefile"] = cookie_file
+    else:
+        ydl_opts["extractor_args"] = {'youtube': {'player_client': ['android', 'ios']}}
 
     print(f"[INFO] 音声ダウンロード中... ({video_id})")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
