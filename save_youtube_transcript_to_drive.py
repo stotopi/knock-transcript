@@ -68,8 +68,12 @@ def get_recent_videos(cookie_file: str) -> List[Dict[str, str]]:
     seen_ids = set()
     
     ydl_opts_single = {
-        "quiet": True, "skip_download": True
+        "quiet": True, 
+        "skip_download": True,
+        "username": "oauth2",
+        "password": ""
     }
+    
     # Cookieがある場合は通常クライアント、ない場合はモバイル偽装を使用
     if cookie_file:
         ydl_opts_single["cookiefile"] = cookie_file
@@ -116,8 +120,11 @@ def download_audio(video_id: str, cookie_file: str, output_dir: str = "./audio_t
     out_path = os.path.join(output_dir, f"{video_id}.mp3")
     
     ydl_opts = {
-        'format': 'bestaudio/best', 'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
+        'format': 'bestaudio/best', 
+        'outtmpl': os.path.join(output_dir, f"{video_id}.%(ext)s"),
         'quiet': False,
+        'username': "oauth2",
+        'password': "",
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
     }
     
