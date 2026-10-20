@@ -1,7 +1,7 @@
 name: YouTube Transcript to Drive
 
 on:
-  workflow_dispatch: # 手動実行用ボタン（残しておくといつでも手動で動かせます）
+  workflow_dispatch: # 手動実行用ボタン
   schedule:
     - cron: '0 18 * * *' # 日本時間 毎日AM 3:00 に自動実行
 
@@ -17,27 +17,18 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 追加: 音声抽出・変換に必要なFFmpegをシステムにインストール
       - name: Install system dependencies (FFmpeg)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      # 修正: faster-whisper と yt-dlp を依存関係に追加
-      - name: Install Python dependencies
-        run: |
-          pip install yt-dlp faster-whisper
-          # 既存のGoogle Drive API用ライブラリも残す
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
-
-      - name: Run script
-        env:
-          # Google Drive認証とYouTube Cookieのシークレットを読み込む
-          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
-        run: python save_youtube_transcript_to_drive.py
-
       - name: Install Python dependencies
         run: |
           pip install yt-dlp faster-whisper yt-dlp-youtube-oauth2
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: Run script
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: python save_youtube_transcript_to_drive.py
