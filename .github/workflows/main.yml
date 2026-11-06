@@ -3,7 +3,7 @@ name: YouTube Transcript to Drive
 on:
   workflow_dispatch: # 手動実行用
   schedule:
-    - cron: '0 19 * * *' # 日本時間 毎日AM 3:00 に自動実行
+    - cron: '0 18 * * *' # 日本時間 毎日AM 3:00 に自動実行
 
 jobs:
   transcribe_and_save:
@@ -19,10 +19,11 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install youtube-transcript-api
+          pip install requests
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
       - name: Run script
         env:
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: python save_youtube_transcript_to_drive.py
