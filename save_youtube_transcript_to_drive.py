@@ -3,6 +3,7 @@ import json
 import urllib.request
 import xml.etree.ElementTree as ET
 import requests
+from datetime import datetime, timedelta, timezone
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -17,7 +18,7 @@ if not RAPIDAPI_KEY or not GCP_CREDENTIALS:
 
 # 2. 対象チャンネルと保存先フォルダの設定
 CHANNEL_ID = 'UCTGk0UuXAgJczNXDJb3EVaQ' # ノックチャンネル
-DRIVE_FOLDER_ID = '1kexclZcDIdcE97zNsgmEM3IXtK6vb9IE'
+DRIVE_FOLDER_ID = '1v0p6mO7kROq_zGAI-wArsiTBNpbvr12v' # 指定の新しいフォルダID
 
 # 3. RSSフィードから最新動画のIDを自動取得
 print(f"チャンネルID: {CHANNEL_ID} の最新動画を検索中...")
@@ -46,14 +47,21 @@ api_response = requests.get(url, headers=headers, params=querystring)
 api_response.raise_for_status() # エラーがあれば処理を止める
 transcript_data = api_response.text # 取得したデータをテキスト化
 
-# 5. Google Driveへ保存するための準備
+# 5. ファイル名の生成（日本時間の「前日」を計算）
+JST = timezone(timedelta(hours=9), 'JST')
+now_jst = datetime.now(JST)
+target_date = now_jst - timedelta(days=1) # 現在時刻から1日（24時間）マイナスする
+file_name = f"{target_date.strftime('%Y_%m_%d')}_文字起こし.txt"
+print(f"保存するファイル名: {file_name}")
+
+# 6. Google Driveへ保存するための準備
 credentials_dict = json.loads(GCP_CREDENTIALS)
 credentials = service_account.Credentials.from_service_account_info(credentials_dict)
 drive_service = build('drive', 'v3', credentials=credentials)
 
-# 6. Driveへファイルをアップロード
+# 7. Driveへファイルをアップロード
 file_metadata = {
-    'name': f'transcript_{VIDEO_ID}.txt', # 保存されるファイル名
+    'name': file_name, # 計算したファイル名を指定
     'parents': [DRIVE_FOLDER_ID]
 }
 media = MediaIoBaseUpload(io.BytesIO(transcript_data.encode('utf-8')), mimetype='text/plain')
